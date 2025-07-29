@@ -14,7 +14,7 @@ on:
       destroy_after_number:
         description: 'Number of time units before auto-destroy'
         required: true
-        type: number
+        type: string
       destroy_after_unit:
         description: 'Time unit for auto-destroy'
         required: true
