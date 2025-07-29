@@ -19,10 +19,6 @@ on:
         description: 'Time unit for auto-destroy'
         required: true
         type: string
-      bootstrap_config:
-        description: 'Bootstrap configuration JSON'
-        required: true
-        type: string
     secrets:
       aap_url:
         required: true
@@ -44,11 +40,6 @@ jobs:
         with:
           fetch-depth: 0
           clean: true
-
-      - name: Create bootstrap.json from input
-        run: |
-          echo '${{ inputs.bootstrap_config }}' > bootstrap.json
-          echo "✅ Created bootstrap.json from workflow input"
 
       - name: Load bootstrap configuration
         id: bootstrap
