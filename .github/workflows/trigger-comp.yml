@@ -1,0 +1,253 @@
+name: Trigger CDF Bootstrap
+
+on:
+  workflow_call:
+    inputs:
+      workflow_type:
+        description: 'Type of workflow to execute'
+        required: true
+        type: string
+      bootstrap_url:
+        description: 'Bootstrap URL for the deployment package'
+        required: true
+        type: string
+      destroy_after_number:
+        description: 'Number of time units before auto-destroy'
+        required: true
+        type: number
+      destroy_after_unit:
+        description: 'Time unit for auto-destroy'
+        required: true
+        type: string
+      bootstrap_config:
+        description: 'Bootstrap configuration JSON'
+        required: true
+        type: string
+    secrets:
+      aap_url:
+        required: true
+      aap_token:
+        required: true
+
+env:
+  AAP_URL: ${{ secrets.aap_url }}
+  AAP_TOKEN: ${{ secrets.aap_token }}
+  ENVIRONMENT: 'dev'
+  CHANGE_ID: 'bootstrap'
+
+jobs:
+  trigger:
+    runs-on: self-hosted
+    steps:
+      - name: Force fresh checkout of latest commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+
+      - name: Create bootstrap.json from input
+        run: |
+          echo '${{ inputs.bootstrap_config }}' > bootstrap.json
+          echo "✅ Created bootstrap.json from workflow input"
+
+      - name: Load bootstrap configuration
+        id: bootstrap
+        run: |
+          BOOTSTRAP_PATH="bootstrap.json"
+          if [ ! -f "$BOOTSTRAP_PATH" ]; then
+            echo "❌ bootstrap.json not found at $BOOTSTRAP_PATH"
+            exit 1
+          fi
+          
+          # Extract values
+          APPCODE=$(jq -r '.bootstrap.deployment.appcode' "$BOOTSTRAP_PATH")
+          DISCOVERY_MODE=$(jq -r '.bootstrap.deployment.discovery_mode' "$BOOTSTRAP_PATH")
+          USE_STABLE_INFRASTRUCTURE=$(jq -r '.bootstrap.deployment.use_stable_infrastructure' "$BOOTSTRAP_PATH")
+          SUBSCRIPTION_ID=$(jq -r '.bootstrap.deployment.subscription_id' "$BOOTSTRAP_PATH")
+          NEXUS_URL=$(jq -r '.nexus.url' "$BOOTSTRAP_PATH")
+          TFE_ENDPOINT=$(jq -r '.tfe.endpoint' "$BOOTSTRAP_PATH")
+          TFE_ORGANIZATION=$(jq -r '.tfe.organization' "$BOOTSTRAP_PATH")
+          TF_CONFIG=$(jq -c '.tf_config' "$BOOTSTRAP_PATH")
+          
+          WORKFLOW_TYPE="${{ inputs.workflow_type }}"
+          WORKFLOW_NAME=$(jq -r ".bootstrap.deployment.workflows.$WORKFLOW_TYPE" "$BOOTSTRAP_PATH")
+          
+          if [ "$WORKFLOW_NAME" = "null" ] || [ -z "$WORKFLOW_NAME" ]; then
+            echo "❌ Invalid workflow type: $WORKFLOW_TYPE"
+            echo "Available workflow types:"
+            jq -r '.bootstrap.deployment.workflows | keys[]' "$BOOTSTRAP_PATH"
+            exit 1
+          fi
+          
+          echo "workflow_name=$WORKFLOW_NAME" >> $GITHUB_OUTPUT
+          echo "appcode=$APPCODE" >> $GITHUB_OUTPUT
+          echo "discovery_mode=$DISCOVERY_MODE" >> $GITHUB_OUTPUT
+          echo "use_stable_infrastructure=$USE_STABLE_INFRASTRUCTURE" >> $GITHUB_OUTPUT
+          echo "subscription_id=$SUBSCRIPTION_ID" >> $GITHUB_OUTPUT
+          echo "nexus_url=$NEXUS_URL" >> $GITHUB_OUTPUT
+          echo "tfe_endpoint=$TFE_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "tfe_organization=$TFE_ORGANIZATION" >> $GITHUB_OUTPUT
+          echo "tf_config=$TF_CONFIG" >> $GITHUB_OUTPUT
+          
+          echo "✅ Loaded configuration from bootstrap.json"
+          echo "Workflow Type: $WORKFLOW_TYPE"
+          echo "Workflow Name: $WORKFLOW_NAME"
+          echo "App Code: $APPCODE"
+
+      - name: Trigger AAP workflow job template
+        run: |
+          LOB_NAME="${{ github.event.repository.name }}"
+          GITHUB_ORG="${{ github.repository_owner }}"
+          GITHUB_SHA="${{ github.sha }}"
+          WORKFLOW_NAME="${{ steps.bootstrap.outputs.workflow_name }}"
+          WORKFLOW_TYPE="${{ inputs.workflow_type }}"
+          
+          if [ "$WORKFLOW_TYPE" = "Destroy" ]; then
+            OPERATION="destroy"
+          else
+            OPERATION="apply"
+          fi
+          
+          FORCE_APPLY="all"
+          ENVIRONMENT="${{ env.ENVIRONMENT }}"
+          CHANGE_ID="${{ env.CHANGE_ID }}"
+          BOOTSTRAP_URL="${{ inputs.bootstrap_url }}"
+          DESTROY_AFTER_NUMBER="${{ inputs.destroy_after_number }}"
+          DESTROY_AFTER_UNIT="${{ inputs.destroy_after_unit }}"
+          DESTROY_AFTER="$DESTROY_AFTER_NUMBER $DESTROY_AFTER_UNIT"
+
+          if [ "$DESTROY_AFTER_NUMBER" -le 0 ]; then
+            echo "❌ Error: destroy_after_number must be greater than 0"
+            exit 1
+          fi
+
+          echo "🚀 Triggering AAP Workflow: $WORKFLOW_NAME"
+          echo "🔧 Operation: $OPERATION"
+          echo "🔧 Force Apply: $FORCE_APPLY"
+          echo "🔧 Destroy After: $DESTROY_AFTER"
+          echo "🔧 Bootstrap URL: $BOOTSTRAP_URL"
+
+          WF_RESPONSE=$(curl -k -s -w "\n%{http_code}" -X GET \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $AAP_TOKEN" \
+            "$AAP_URL/api/v2/workflow_job_templates/?name=$WORKFLOW_NAME")
+
+          WF_HTTP_CODE=$(echo "$WF_RESPONSE" | tail -n1)
+          WF_BODY=$(echo "$WF_RESPONSE" | head -n -1)
+
+          if [ "$WF_HTTP_CODE" -eq 200 ]; then
+            WF_ID=$(echo "$WF_BODY" | jq -r '.results[0].id')
+            if [ "$WF_ID" != "null" ] && [ "$WF_ID" != "" ]; then
+              echo "✅ Found workflow: $WORKFLOW_NAME (ID: $WF_ID)"
+
+              TF_CONFIG=$(jq -c '.tf_config' bootstrap.json)
+              TF_CONFIG_VALID=$(echo "$TF_CONFIG" | jq . 2>/dev/null)
+              if [ $? -ne 0 ]; then
+                echo "❌ Invalid tf_config JSON: $TF_CONFIG"
+                exit 1
+              fi
+              echo "✅ tf_config JSON is valid"
+
+              DEPLOYMENT_VARS=$(jq -nc \
+                --arg appcode "${{ steps.bootstrap.outputs.appcode }}" \
+                --arg discovery_mode "${{ steps.bootstrap.outputs.discovery_mode }}" \
+                --arg use_stable_infrastructure "${{ steps.bootstrap.outputs.use_stable_infrastructure }}" \
+                --arg subscription_id "${{ steps.bootstrap.outputs.subscription_id }}" \
+                --arg nexus_url "${{ steps.bootstrap.outputs.nexus_url }}" \
+                --arg tfe_endpoint "${{ steps.bootstrap.outputs.tfe_endpoint }}" \
+                --arg tfe_organization "${{ steps.bootstrap.outputs.tfe_organization }}" \
+                --argjson tf_config "$TF_CONFIG" \
+                --arg deployment_id "${{ steps.bootstrap.outputs.appcode }}-$ENVIRONMENT-001" \
+                '{
+                  appcode: $appcode,
+                  discovery_mode: ($discovery_mode == "true"),
+                  use_stable_infrastructure: ($use_stable_infrastructure == "true"),
+                  subscription_id: $subscription_id,
+                  nexus_url: $nexus_url,
+                  tfe_endpoint: $tfe_endpoint,
+                  tfe_organization: $tfe_organization,
+                  tf_config: $tf_config,
+                  deployment_id: $deployment_id
+                }')
+
+              echo "🔍 Deployment vars from bootstrap.json: $DEPLOYMENT_VARS"
+
+              COMPOSITION_PATH="infrastructure/compositions/${WORKFLOW_NAME}.json"
+
+              BOOTSTRAP_OBJECT=$(jq -c '.bootstrap' bootstrap.json)
+              
+              if [ $? -ne 0 ]; then
+                echo "❌ Error reading bootstrap object from bootstrap.json"
+                exit 1
+              fi
+              
+              BOOTSTRAP_VALID=$(echo "$BOOTSTRAP_OBJECT" | jq . 2>/dev/null)
+              if [ $? -ne 0 ]; then
+                echo "❌ Invalid bootstrap object JSON: $BOOTSTRAP_OBJECT"
+                exit 1
+              fi
+              echo "✅ Bootstrap object JSON is valid"
+              
+              echo "🔍 Bootstrap object length: ${#BOOTSTRAP_OBJECT}"
+              echo "🔍 Bootstrap object preview: ${BOOTSTRAP_OBJECT:0:100}..."
+
+              DEPLOYMENT_VARS_VALID=$(echo "$DEPLOYMENT_VARS" | jq . 2>/dev/null)
+              if [ $? -ne 0 ]; then
+                echo "❌ Invalid deployment_vars JSON: $DEPLOYMENT_VARS"
+                exit 1
+              fi
+              echo "✅ deployment_vars JSON is valid"
+
+              echo "🔍 About to create JSON_BODY with all three --argjson parameters..."
+
+              JSON_BODY=$(jq -nc \
+                --arg lob_name "$LOB_NAME" \
+                --arg github_org "$GITHUB_ORG" \
+                --arg tf_operation "$OPERATION" \
+                --arg workflow_name "$WORKFLOW_NAME" \
+                --arg force_apply "$FORCE_APPLY" \
+                --arg github_sha "$GITHUB_SHA" \
+                --arg composition_path "$COMPOSITION_PATH" \
+                --arg deployment_environment "$ENVIRONMENT" \
+                --arg change_id "$CHANGE_ID" \
+                --arg bootstrap_url "$BOOTSTRAP_URL" \
+                --arg destroy_after "$DESTROY_AFTER" \
+                --argjson bootstrap "$BOOTSTRAP_OBJECT" \
+                --argjson deployment_vars "$DEPLOYMENT_VARS" \
+                '{extra_vars: ({lob_name: $lob_name, force_apply: $force_apply, github_sha: $github_sha, github_org: $github_org, tf_operation: $tf_operation, workflow_name: $workflow_name, composition_path: $composition_path, deployment_environment: $deployment_environment, change_id: $change_id, bootstrap_url: $bootstrap_url, destroy_after: $destroy_after, bootstrap: $bootstrap, appcode: $deployment_vars.appcode, discovery_mode: $deployment_vars.discovery_mode, deployment_id: $deployment_vars.deployment_id, nexus_url: $deployment_vars.nexus_url, use_stable_infrastructure: $deployment_vars.use_stable_infrastructure, subscription_id: $deployment_vars.subscription_id, tf_config: $deployment_vars.tf_config, tfe_endpoint: $deployment_vars.tfe_endpoint, tfe_organization: $deployment_vars.tfe_organization})}')
+
+              echo "JSON_BODY: $JSON_BODY"
+              echo "AAP_URL: $AAP_URL"
+
+              LAUNCH_RESPONSE=$(echo "$JSON_BODY" | curl -k -s -w "\n%{http_code}" -X POST \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $AAP_TOKEN" \
+                "$AAP_URL/api/v2/workflow_job_templates/$WF_ID/launch/" \
+                -d @-)
+
+              LAUNCH_HTTP_CODE=$(echo "$LAUNCH_RESPONSE" | tail -n1)
+              LAUNCH_BODY=$(echo "$LAUNCH_RESPONSE" | head -n -1)
+
+              if [ "$LAUNCH_HTTP_CODE" -eq 201 ]; then
+                JOB_ID=$(echo "$LAUNCH_BODY" | jq -r '.id')
+                echo "✅ Workflow launched successfully"
+                echo "Job ID: $JOB_ID"
+                echo "Job URL: $AAP_URL/#/jobs/workflow/$JOB_ID"
+              else
+                echo "❌ Failed to launch workflow"
+                echo "HTTP Code: $LAUNCH_HTTP_CODE"
+                echo "Response: $LAUNCH_BODY"
+                exit 1
+              fi
+            else
+              echo "❌ Workflow not found: $WORKFLOW_NAME"
+              echo "Available workflows:"
+              echo "$WF_BODY" | jq -r '.results[].name'
+              exit 1
+            fi
+          else
+            echo "❌ Failed to get workflow"
+            echo "HTTP Code: $WF_HTTP_CODE"
+            echo "Response: $WF_BODY"
+            exit 1
+          fi 
