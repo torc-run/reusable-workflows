@@ -1,0 +1,155 @@
+name: Trigger MSC
+
+on:
+  workflow_call:
+    inputs:
+      tf_operation:
+        required: true
+        type: string
+      paved_path:
+        required: true
+        type: string
+      force_apply:
+        required: false
+        type: string
+      environment:
+        required: true
+        type: string
+        default: 'dev'
+      change_id:
+        required: false
+        type: string
+        default: 'na'
+    secrets:
+      aap_token:
+        required: true
+      aap_url:
+        required: true
+
+env:
+  AAP_URL: ${{ secrets.aap_url }}
+  AAP_TOKEN: ${{ secrets.aap_token }}
+
+jobs:
+  trigger:
+    runs-on: self-hosted
+    steps:
+      - name: Force fresh checkout of latest commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # ensures full history
+          clean: true          # removes previous working copy
+
+      - name: Trigger AAP workflow job template
+        run: |
+          LOB_NAME="${{ github.event.repository.name }}"
+          GITHUB_ORG="${{ github.repository_owner }}"
+          GITHUB_SHA="${{ github.sha }}"
+          WORKFLOW_NAME="${{ inputs.paved_path }}"
+          OPERATION="${{ inputs.tf_operation }}"
+          FORCE_APPLY="${{ inputs.force_apply || '' }}"
+          ENVIRONMENT="${{ inputs.environment }}"
+          CHANGE_ID="${{ inputs.change_id }}"
+
+          echo "🚀 Triggering AAP Workflow: $WORKFLOW_NAME"
+
+          WF_RESPONSE=$(curl -k -s -w "\n%{http_code}" -X GET \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $AAP_TOKEN" \
+            "$AAP_URL/api/v2/workflow_job_templates/?name=$WORKFLOW_NAME")
+
+          WF_HTTP_CODE=$(echo "$WF_RESPONSE" | tail -n1)
+          WF_BODY=$(echo "$WF_RESPONSE" | head -n -1)
+
+          if [ "$WF_HTTP_CODE" -eq 200 ]; then
+            WF_ID=$(echo "$WF_BODY" | jq -r '.results[0].id')
+            if [ "$WF_ID" != "null" ] && [ "$WF_ID" != "" ]; then
+              echo "✅ Found workflow: $WORKFLOW_NAME (ID: $WF_ID)"
+
+              # Load static context configuration
+              CONTEXT_JSON_PATH="infrastructure/torc/context.json"
+              if [ -f "$CONTEXT_JSON_PATH" ]; then
+                CONTEXT_VARS=$(cat "$CONTEXT_JSON_PATH" | jq -c '.')
+              else
+                echo "❌ context.json not found at $CONTEXT_JSON_PATH"
+                exit 1
+              fi
+
+              # Load environment-specific configuration
+          
+              ENV_CONFIG_PATH="infrastructure/environments/$ENVIRONMENT/env_config.json"
+              cat $ENV_CONFIG_PATH
+              echo "🔍 Loading env config from: $ENV_CONFIG_PATH"
+              if [ -f "$ENV_CONFIG_PATH" ]; then
+                ENV_VARS=$(cat "$ENV_CONFIG_PATH" | jq -c '.')
+                echo "🔍 Env config content: $ENV_VARS"
+              else
+                echo "❌ env_config.json not found at $ENV_CONFIG_PATH"
+                exit 1
+              fi
+
+              echo "🔍 DEBUG: Context vars: $CONTEXT_VARS"
+              echo "🔍 DEBUG: Env vars: $ENV_VARS"
+
+              # Merge context and environment variables with proper override logic
+              # Context provides defaults, env_config can override
+              DEPLOYMENT_VARS=$(echo "$CONTEXT_VARS" "$ENV_VARS" | jq -s '
+                .[0] as $context | 
+                .[1] as $env | 
+                $context * $env
+              ')
+              echo "🔍 Final merged deployment vars: $DEPLOYMENT_VARS"
+              echo "🔍 nexus_url from merged vars: $(echo "$DEPLOYMENT_VARS" | jq -r '.nexus_url')"
+
+              # Determine composition path based on paved_path input
+              COMPOSITION_PATH="infrastructure/compositions/${WORKFLOW_NAME}.json"
+
+              JSON_BODY=$(jq -nc \
+                --arg lob_name "$LOB_NAME" \
+                --arg github_org "$GITHUB_ORG" \
+                --arg tf_operation "$OPERATION" \
+                --arg workflow_name "$WORKFLOW_NAME" \
+                --arg force_apply "$FORCE_APPLY" \
+                --arg github_sha "$GITHUB_SHA" \
+                --arg composition_path "$COMPOSITION_PATH" \
+                --arg deployment_environment "$ENVIRONMENT" \
+                --arg change_id "$CHANGE_ID" \
+                --argjson deployment_vars "$DEPLOYMENT_VARS" \
+                '{extra_vars: ({lob_name: $lob_name, force_apply: $force_apply, github_sha: $github_sha, github_org: $github_org, tf_operation: $tf_operation, workflow_name: $workflow_name, composition_path: $composition_path, deployment_environment: $deployment_environment, change_id: $change_id, appcode: $deployment_vars.appcode, discovery_mode: $deployment_vars.discovery_mode, deployment_id: $deployment_vars.deployment_id, nexus_url: $deployment_vars.nexus_url, use_stable_infrastructure: $deployment_vars.use_stable_infrastructure, subscription_id: $deployment_vars.subscription_id, tf_config: $deployment_vars.tf_config, tfe_endpoint: $deployment_vars.tfe_endpoint, tfe_organization: $deployment_vars.tfe_organization, tfe_project_id: $deployment_vars.tfe_project_id})}'
+              )
+
+              echo "JSON_BODY: $JSON_BODY"
+              echo "AAP_URL: $AAP_URL"
+
+              LAUNCH_RESPONSE=$(echo "$JSON_BODY" | curl -k -s -w "\n%{http_code}" -X POST \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $AAP_TOKEN" \
+                "$AAP_URL/api/v2/workflow_job_templates/$WF_ID/launch/" \
+                -d @-)
+
+              LAUNCH_HTTP_CODE=$(echo "$LAUNCH_RESPONSE" | tail -n1)
+              LAUNCH_BODY=$(echo "$LAUNCH_RESPONSE" | head -n -1)
+
+              if [ "$LAUNCH_HTTP_CODE" -eq 201 ]; then
+                JOB_ID=$(echo "$LAUNCH_BODY" | jq -r '.id')
+                echo "✅ Workflow launched successfully"
+                echo "Job ID: $JOB_ID"
+                echo "Job URL: $AAP_URL/#/jobs/workflow/$JOB_ID"
+              else
+                echo "❌ Failed to launch workflow"
+                echo "HTTP Code: $LAUNCH_HTTP_CODE"
+                echo "Response: $LAUNCH_BODY"
+                exit 1
+              fi
+            else
+              echo "❌ Workflow not found: $WORKFLOW_NAME"
+              echo "Available workflows:"
+              echo "$WF_BODY" | jq -r '.results[].name'
+              exit 1
+            fi
+          else
+            echo "❌ Failed to get workflow"
+            echo "HTTP Code: $WF_HTTP_CODE"
+            echo "Response: $WF_BODY"
+            exit 1
+          fi 
