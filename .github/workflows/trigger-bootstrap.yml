@@ -7,10 +7,7 @@ on:
         description: 'Type of workflow to execute'
         required: true
         type: string
-      bootstrap_url:
-        description: 'Bootstrap URL for the deployment package'
-        required: true
-        type: string
+
       destroy_after_number:
         description: 'Number of time units before auto-destroy'
         required: true
@@ -56,6 +53,7 @@ jobs:
           USE_STABLE_INFRASTRUCTURE=$(jq -r '.bootstrap.deployment.use_stable_infrastructure' "$BOOTSTRAP_PATH")
           SUBSCRIPTION_ID=$(jq -r '.bootstrap.deployment.subscription_id' "$BOOTSTRAP_PATH")
           NEXUS_URL=$(jq -r '.nexus.url' "$BOOTSTRAP_PATH")
+          NEXUS_PATH=$(jq -r '.nexus.path' "$BOOTSTRAP_PATH")
           TFE_ENDPOINT=$(jq -r '.tfe.endpoint' "$BOOTSTRAP_PATH")
           TFE_ORGANIZATION=$(jq -r '.tfe.organization' "$BOOTSTRAP_PATH")
           TF_CONFIG=$(jq -c '.tf_config' "$BOOTSTRAP_PATH")
@@ -76,6 +74,7 @@ jobs:
           echo "use_stable_infrastructure=$USE_STABLE_INFRASTRUCTURE" >> $GITHUB_OUTPUT
           echo "subscription_id=$SUBSCRIPTION_ID" >> $GITHUB_OUTPUT
           echo "nexus_url=$NEXUS_URL" >> $GITHUB_OUTPUT
+          echo "nexus_path=$NEXUS_PATH" >> $GITHUB_OUTPUT
           echo "tfe_endpoint=$TFE_ENDPOINT" >> $GITHUB_OUTPUT
           echo "tfe_organization=$TFE_ORGANIZATION" >> $GITHUB_OUTPUT
           echo "tf_config=$TF_CONFIG" >> $GITHUB_OUTPUT
@@ -102,7 +101,7 @@ jobs:
           FORCE_APPLY="all"
           ENVIRONMENT="${{ env.ENVIRONMENT }}"
           CHANGE_ID="${{ env.CHANGE_ID }}"
-          BOOTSTRAP_URL="${{ inputs.bootstrap_url }}"
+          BOOTSTRAP_URL="${{ steps.bootstrap.outputs.nexus_url }}${{ steps.bootstrap.outputs.nexus_path }}"
           DESTROY_AFTER_NUMBER="${{ inputs.destroy_after_number }}"
           DESTROY_AFTER_UNIT="${{ inputs.destroy_after_unit }}"
           DESTROY_AFTER="$DESTROY_AFTER_NUMBER $DESTROY_AFTER_UNIT"
