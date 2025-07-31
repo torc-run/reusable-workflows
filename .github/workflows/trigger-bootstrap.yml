@@ -52,6 +52,7 @@ jobs:
           DISCOVERY_MODE=$(jq -r '.bootstrap.deployment.discovery_mode' "$BOOTSTRAP_PATH")
           USE_STABLE_INFRASTRUCTURE=$(jq -r '.bootstrap.deployment.use_stable_infrastructure' "$BOOTSTRAP_PATH")
           SUBSCRIPTION_ID=$(jq -r '.bootstrap.deployment.subscription_id' "$BOOTSTRAP_PATH")
+          TFE_PROJECT_ID=$(jq -r '.bootstrap.deployment.tfe_project_id' "$BOOTSTRAP_PATH")
           NEXUS_URL=$(jq -r '.nexus.url' "$BOOTSTRAP_PATH")
           NEXUS_PATH=$(jq -r '.nexus.path' "$BOOTSTRAP_PATH")
           TFE_ENDPOINT=$(jq -r '.tfe.endpoint' "$BOOTSTRAP_PATH")
@@ -73,6 +74,7 @@ jobs:
           echo "discovery_mode=$DISCOVERY_MODE" >> $GITHUB_OUTPUT
           echo "use_stable_infrastructure=$USE_STABLE_INFRASTRUCTURE" >> $GITHUB_OUTPUT
           echo "subscription_id=$SUBSCRIPTION_ID" >> $GITHUB_OUTPUT
+          echo "tfe_project_id=$TFE_PROJECT_ID" >> $GITHUB_OUTPUT
           echo "nexus_url=$NEXUS_URL" >> $GITHUB_OUTPUT
           echo "nexus_path=$NEXUS_PATH" >> $GITHUB_OUTPUT
           echo "tfe_endpoint=$TFE_ENDPOINT" >> $GITHUB_OUTPUT
@@ -143,6 +145,7 @@ jobs:
                 --arg discovery_mode "${{ steps.bootstrap.outputs.discovery_mode }}" \
                 --arg use_stable_infrastructure "${{ steps.bootstrap.outputs.use_stable_infrastructure }}" \
                 --arg subscription_id "${{ steps.bootstrap.outputs.subscription_id }}" \
+                --arg tfe_project_id "${{ steps.bootstrap.outputs.tfe_project_id }}" \
                 --arg nexus_url "${{ steps.bootstrap.outputs.nexus_url }}" \
                 --arg tfe_endpoint "${{ steps.bootstrap.outputs.tfe_endpoint }}" \
                 --arg tfe_organization "${{ steps.bootstrap.outputs.tfe_organization }}" \
@@ -153,6 +156,7 @@ jobs:
                   discovery_mode: ($discovery_mode == "true"),
                   use_stable_infrastructure: ($use_stable_infrastructure == "true"),
                   subscription_id: $subscription_id,
+                  tfe_project_id: $tfe_project_id,
                   nexus_url: $nexus_url,
                   tfe_endpoint: $tfe_endpoint,
                   tfe_organization: $tfe_organization,
@@ -204,7 +208,7 @@ jobs:
                 --arg destroy_after "$DESTROY_AFTER" \
                 --argjson bootstrap "$BOOTSTRAP_OBJECT" \
                 --argjson deployment_vars "$DEPLOYMENT_VARS" \
-                '{extra_vars: ({lob_name: $lob_name, force_apply: $force_apply, github_sha: $github_sha, github_org: $github_org, tf_operation: $tf_operation, workflow_name: $workflow_name, composition_path: $composition_path, deployment_environment: $deployment_environment, change_id: $change_id, bootstrap_url: $bootstrap_url, destroy_after: $destroy_after, bootstrap: $bootstrap, appcode: $deployment_vars.appcode, discovery_mode: $deployment_vars.discovery_mode, deployment_id: $deployment_vars.deployment_id, nexus_url: $deployment_vars.nexus_url, use_stable_infrastructure: $deployment_vars.use_stable_infrastructure, subscription_id: $deployment_vars.subscription_id, tf_config: $deployment_vars.tf_config, tfe_endpoint: $deployment_vars.tfe_endpoint, tfe_organization: $deployment_vars.tfe_organization})}')
+                '{extra_vars: ({lob_name: $lob_name, force_apply: $force_apply, github_sha: $github_sha, github_org: $github_org, tf_operation: $tf_operation, workflow_name: $workflow_name, composition_path: $composition_path, deployment_environment: $deployment_environment, change_id: $change_id, bootstrap_url: $bootstrap_url, destroy_after: $destroy_after, bootstrap: $bootstrap, appcode: $deployment_vars.appcode, discovery_mode: $deployment_vars.discovery_mode, deployment_id: $deployment_vars.deployment_id, nexus_url: $deployment_vars.nexus_url, use_stable_infrastructure: $deployment_vars.use_stable_infrastructure, subscription_id: $deployment_vars.subscription_id, tfe_project_id: $deployment_vars.tfe_project_id, tf_config: $deployment_vars.tf_config, tfe_endpoint: $deployment_vars.tfe_endpoint, tfe_organization: $deployment_vars.tfe_organization})}')
 
               echo "JSON_BODY: $JSON_BODY"
               echo "AAP_URL: $AAP_URL"
