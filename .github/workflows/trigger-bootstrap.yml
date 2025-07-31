@@ -103,7 +103,7 @@ jobs:
           FORCE_APPLY="all"
           ENVIRONMENT="${{ env.ENVIRONMENT }}"
           CHANGE_ID="${{ env.CHANGE_ID }}"
-          BOOTSTRAP_URL="${{ steps.bootstrap.outputs.nexus_url }}/repository/cdf-patterns${{ steps.bootstrap.outputs.nexus_path }}022/msc_ai_pilot-022.tar.gz"
+          BOOTSTRAP_URL="${{ steps.bootstrap.outputs.nexus_url }}/repository/cdf-patterns${{ steps.bootstrap.outputs.nexus_path }}"
           DESTROY_AFTER_NUMBER="${{ inputs.destroy_after_number }}"
           DESTROY_AFTER_UNIT="${{ inputs.destroy_after_unit }}"
           DESTROY_AFTER="$DESTROY_AFTER_NUMBER $DESTROY_AFTER_UNIT"
